@@ -1,0 +1,42 @@
+apiVersion: cloudkit.openshift.io/v1alpha1
+kind: VirtualMachine
+metadata:
+  name: test-vm-controller
+  namespace: cloudkit-vm-orders
+  annotations:
+    # Use controller-based provisioning (default, can be omitted)
+    cloudkit.openshift.io/provisioning-method: controller
+    cloudkit.openshift.io/tenant: test-tenant
+spec:
+  templateID: cloudkit.templates.ocp_virt_vm
+  templateParameters: |
+    {
+      "cpu_cores": 2,
+      "memory": "4Gi",
+      "disk_size": "20Gi",
+      "image_source": "quay.io/fedora/fedora-coreos:stable",
+      "cloud_init_config": "I2Nsb3VkLWNvbmZpZwp1c2VyczogCiAgLSBuYW1lOiBmZWRvcmEKICAgIHN1ZG86IEFMTD0oQUxMKSBOT1BBU1NXRDpBTEwKICAgIHNzaF9hdXRob3JpemVkX2tleXM6CiAgICAgIC0gc3NoLXJzYSBBQUFBQjNOemFDMXljMkVBQUFBREFRQUJBQUFCQVFEQzV0YW1hbEREVT09IHRlc3RAZXhhbXBsZS5jb20K",
+      "ssh_public_key": "c3NoLXJzYSBBQUFBQjNOemFDMXljMkVBQUFBREFRQUJBQUFCQVFEQzV0YW1hbEREVT09IHRlc3RAZXhhbXBsZS5jb20K",
+      "exposed_ports": "22/tcp,80/tcp,443/tcp"
+    }
+---
+apiVersion: cloudkit.openshift.io/v1alpha1
+kind: VirtualMachine
+metadata:
+  name: test-vm-webhook
+  namespace: cloudkit-vm-orders
+  annotations:
+    # Use webhook-based provisioning (legacy AAP mode)
+    cloudkit.openshift.io/provisioning-method: webhook
+    cloudkit.openshift.io/tenant: test-tenant
+spec:
+  templateID: cloudkit.templates.ocp_virt_vm
+  templateParameters: |
+    {
+      "cpu_cores": 1,
+      "memory": "2Gi",
+      "disk_size": "10Gi",
+      "image_source": "quay.io/fedora/fedora-coreos:stable",
+      "cloud_init_config": "I2Nsb3VkLWNvbmZpZwp1c2VyczogCiAgLSBuYW1lOiBmZWRvcmEKICAgIHN1ZG86IEFMTD0oQUxMKSBOT1BBU1NXRDpBTEwK",
+      "exposed_ports": "22/tcp"
+    }

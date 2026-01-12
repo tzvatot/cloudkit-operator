@@ -8,7 +8,21 @@ rules:
   - ""
   resources:
   - namespaces
+  - secrets
   - serviceaccounts
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cdi.kubevirt.io
+  resources:
+  - datavolumes
   verbs:
   - create
   - delete
@@ -76,10 +90,14 @@ rules:
 - apiGroups:
   - kubevirt.io
   resources:
-  - computeinstances
+  - virtualmachines
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - rbac.authorization.k8s.io

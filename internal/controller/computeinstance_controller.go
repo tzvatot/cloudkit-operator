@@ -77,8 +77,12 @@ func NewComputeInstanceReconciler(
 // +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=computeinstances,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=computeinstances/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=computeinstances/finalizers,verbs=update
+// +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=kubevirt.io,resources=computeinstances,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachines,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cdi.kubevirt.io,resources=datavolumes,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -263,6 +267,37 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 	instance.Status.Phase = v1alpha1.ComputeInstancePhaseProgressing
 	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProgressing, metav1.ConditionTrue, "Applying configuration", v1alpha1.ReasonAsExpected)
 
+	// Check provisioning method - default to controller if not specified
+	provisioningMethod := instance.Annotations[cloudkitComputeInstanceProvisioningMethodAnnotation]
+	if provisioningMethod == "" {
+		provisioningMethod = ProvisioningMethodController
+	}
+
+	// Handle controller-based provisioning
+	if provisioningMethod == ProvisioningMethodController {
+		log.Info("using controller-based provisioning")
+		if err := r.provisionComputeInstanceResources(ctx, instance, tenant); err != nil {
+			log.Error(err, "failed to provision resources via controller")
+			instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProgressing, metav1.ConditionFalse, fmt.Sprintf("Failed to provision: %v", err), v1alpha1.ReasonFailed)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+
+		// Set the reconciled config version annotation to match the desired config version
+		if instance.Annotations == nil {
+			instance.Annotations = make(map[string]string)
+		}
+		instance.Annotations[cloudkitAAPReconciledConfigVersionAnnotation] = instance.Status.DesiredConfigVersion
+
+		// Update the instance with the new annotation
+		if err := r.Update(ctx, instance); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		log.Info("controller-based provisioning completed successfully")
+		return ctrl.Result{}, nil
+	}
+
+	// Handle webhook-based provisioning (legacy)
 	if url := r.CreateComputeInstanceWebhook; url != "" {
 		val, exists := instance.Annotations[cloudkitComputeInstanceManagementStateAnnotation]
 		if exists && val == ManagementStateManual {

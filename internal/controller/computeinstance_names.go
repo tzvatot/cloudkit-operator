@@ -25,11 +25,18 @@ const (
 )
 
 var (
-	cloudkitComputeInstanceNameLabel                 string = fmt.Sprintf("%s/computeinstance", cloudkitPrefix)
-	cloudkitComputeInstanceIDLabel                   string = fmt.Sprintf("%s/computeinstance-uuid", cloudkitPrefix)
-	cloudkitComputeInstanceFinalizer                 string = fmt.Sprintf("%s/computeinstance", cloudkitPrefix)
-	cloudkitAAPComputeInstanceFinalizer              string = fmt.Sprintf("%s/computeinstance-aap", cloudkitPrefix)
-	cloudkitComputeInstanceManagementStateAnnotation string = fmt.Sprintf("%s/management-state", cloudkitPrefix)
-	cloudkitVirualMachineFloatingIPAddressAnnotation string = fmt.Sprintf("%s/floating-ip-address", cloudkitPrefix)
-	cloudkitAAPReconciledConfigVersionAnnotation     string = fmt.Sprintf("%s/reconciled-config-version", cloudkitPrefix)
+	cloudkitComputeInstanceNameLabel                    string = fmt.Sprintf("%s/computeinstance", cloudkitPrefix)
+	cloudkitComputeInstanceIDLabel                      string = fmt.Sprintf("%s/computeinstance-uuid", cloudkitPrefix)
+	cloudkitComputeInstanceFinalizer                    string = fmt.Sprintf("%s/computeinstance", cloudkitPrefix)
+	cloudkitAAPComputeInstanceFinalizer                 string = fmt.Sprintf("%s/computeinstance-aap", cloudkitPrefix)
+	cloudkitComputeInstanceManagementStateAnnotation    string = fmt.Sprintf("%s/management-state", cloudkitPrefix)
+	cloudkitComputeInstanceProvisioningMethodAnnotation string = fmt.Sprintf("%s/provisioning-method", cloudkitPrefix)
+	cloudkitVirualMachineFloatingIPAddressAnnotation    string = fmt.Sprintf("%s/floating-ip-address", cloudkitPrefix)
+	cloudkitAAPReconciledConfigVersionAnnotation        string = fmt.Sprintf("%s/reconciled-config-version", cloudkitPrefix)
+)
+
+const (
+	// ComputeInstance provisioning methods
+	ProvisioningMethodController string = "controller"
+	ProvisioningMethodWebhook    string = "webhook"
 )
