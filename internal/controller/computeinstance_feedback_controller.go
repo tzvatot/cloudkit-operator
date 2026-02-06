@@ -255,6 +255,8 @@ func (t *computeInstanceFeedbackReconcilerTask) syncPhase(ctx context.Context) {
 		t.syncPhaseFailed()
 	case ckv1alpha1.ComputeInstancePhaseRunning:
 		t.syncPhaseRunning()
+	case ckv1alpha1.ComputeInstancePhaseDeleting:
+		t.syncPhaseDeleting()
 	default:
 		log := ctrllog.FromContext(ctx)
 		log.Info(
@@ -275,6 +277,10 @@ func (t *computeInstanceFeedbackReconcilerTask) syncPhaseFailed() {
 func (t *computeInstanceFeedbackReconcilerTask) syncPhaseRunning() {
 	ciStatus := t.ci.GetStatus()
 	ciStatus.SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+}
+
+func (t *computeInstanceFeedbackReconcilerTask) syncPhaseDeleting() {
+	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING)
 }
 
 func (t *computeInstanceFeedbackReconcilerTask) findComputeInstanceCondition(kind privatev1.ComputeInstanceConditionType) *privatev1.ComputeInstanceCondition {

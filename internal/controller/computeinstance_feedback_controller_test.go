@@ -343,6 +343,21 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED))
 		})
 
+		It("should sync Deleting phase", func() {
+			vm := &cloudkitv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
+			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseDeleting
+			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
+
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING))
+		})
+
 		It("should update only once when reconciliation is run twice with same data", func() {
 			// Reset update count
 			mockClient.updateCount = 0
