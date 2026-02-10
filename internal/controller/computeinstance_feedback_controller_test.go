@@ -183,17 +183,26 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
+
+			// Set the phase to Deleting (as the main controller would do in handleDelete)
+			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
+			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseDeleting
+			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
+
+			// Delete the CR (sets DeletionTimestamp, CR stays because of finalizer)
+			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, vm)).To(Succeed())
-			// Set a valid getResponse in case the reconciler tries to fetch (shouldn't happen but prevents panic)
+
 			mockClient.getResponse = &privatev1.ComputeInstancesGetResponse{
 				Object: &privatev1.ComputeInstance{
 					Id:   ciID,
 					Spec: &privatev1.ComputeInstanceSpec{},
 					Status: &privatev1.ComputeInstanceStatus{
-						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED,
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_READY,
 					},
 				},
 			}
+			mockClient.updateResponse = &privatev1.ComputeInstancesUpdateResponse{}
 		})
 
 		AfterEach(func() {
@@ -206,14 +215,16 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			}
 		})
 
-		It("should skip feedback reconciliation", func() {
+		It("should sync Deleting state to fulfillment service", func() {
 			request := reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			}
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.IsZero()).To(BeTrue())
-			Expect(mockClient.updateCalled).To(BeFalse()) // Should not update when deleting
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate).NotTo(BeNil())
+			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING))
 		})
 	})
 
