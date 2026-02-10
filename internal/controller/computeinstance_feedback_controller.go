@@ -84,14 +84,6 @@ func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, reque
 		return
 	}
 
-	// Check if the VM is being deleted before fetching from fulfillment service
-	if !object.ObjectMeta.DeletionTimestamp.IsZero() {
-		log.Info(
-			"ComputeInstance is being deleted, skipping feedback reconciliation",
-		)
-		return
-	}
-
 	// Fetch the compute instance:
 	ci, err := r.fetchComputeInstance(ctx, ciID)
 	if err != nil {
