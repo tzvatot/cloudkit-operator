@@ -15,10 +15,13 @@ package controller
 
 import (
 	"context"
+	"sync"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,6 +37,13 @@ type ComputeInstanceFeedbackReconciler struct {
 	hubClient                clnt.Client
 	computeInstancesClient   privatev1.ComputeInstancesClient
 	computeInstanceNamespace string
+
+	// ciIDCache maps NamespacedName -> CI ID for compute instances seen during
+	// reconciliation. Used to look up the CI ID when the CR has been garbage
+	// collected (NotFound) so we can signal the fulfillment service. In-memory
+	// only; on pod restart the periodic sync (1h) serves as fallback.
+	ciIDCacheMu sync.RWMutex
+	ciIDCache   map[types.NamespacedName]string
 }
 
 // computeInstanceFeedbackReconcilerTask contains data that is used for the reconciliation of a specific compute instance, so there is less
@@ -50,6 +60,7 @@ func NewComputeInstanceFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.
 		hubClient:                hubClient,
 		computeInstancesClient:   privatev1.NewComputeInstancesClient(grpcConn),
 		computeInstanceNamespace: computeInstanceNamespace,
+		ciIDCache:                make(map[types.NamespacedName]string),
 	}
 }
 
@@ -65,11 +76,17 @@ func (r *ComputeInstanceFeedbackReconciler) SetupWithManager(mgr ctrl.Manager) e
 func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request) (result ctrl.Result, err error) {
 	log := ctrllog.FromContext(ctx)
 
-	// Fetch the object to reconcile, and do nothing if it no longer exists:
+	// Fetch the object to reconcile:
 	object := &ckv1alpha1.ComputeInstance{}
 	err = r.hubClient.Get(ctx, request.NamespacedName, object)
 	if err != nil {
-		err = clnt.IgnoreNotFound(err)
+		if !apierrors.IsNotFound(err) {
+			return //nolint:nakedret
+		}
+		// The CR is gone (garbage collected). Signal the fulfillment service
+		// so it can remove the DB finalizer and archive the record immediately.
+		r.handleGarbageCollected(ctx, request.NamespacedName)
+		err = nil
 		return //nolint:nakedret
 	}
 
@@ -83,6 +100,9 @@ func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, reque
 		)
 		return
 	}
+
+	// Cache the CI ID so we can signal the fulfillment service if this CR is garbage collected.
+	r.cacheCIID(request.NamespacedName, ciID)
 
 	// Fetch the compute instance:
 	ci, err := r.fetchComputeInstance(ctx, ciID)
@@ -106,6 +126,58 @@ func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, reque
 		return
 	}
 	return
+}
+
+// cacheCIID stores the CI ID for a given NamespacedName in the in-memory cache.
+func (r *ComputeInstanceFeedbackReconciler) cacheCIID(key types.NamespacedName, ciID string) {
+	r.ciIDCacheMu.Lock()
+	defer r.ciIDCacheMu.Unlock()
+	r.ciIDCache[key] = ciID
+}
+
+// lookupAndDeleteCIID retrieves and removes the CI ID for a given NamespacedName from the cache.
+func (r *ComputeInstanceFeedbackReconciler) lookupAndDeleteCIID(key types.NamespacedName) (string, bool) {
+	r.ciIDCacheMu.Lock()
+	defer r.ciIDCacheMu.Unlock()
+	ciID, ok := r.ciIDCache[key]
+	if ok {
+		delete(r.ciIDCache, key)
+	}
+	return ciID, ok
+}
+
+// handleGarbageCollected is called when the CR is no longer found (garbage collected).
+// It looks up the CI ID from the cache and signals the fulfillment service so it can
+// remove the DB finalizer and archive the record.
+func (r *ComputeInstanceFeedbackReconciler) handleGarbageCollected(ctx context.Context, key types.NamespacedName) {
+	log := ctrllog.FromContext(ctx)
+
+	ciID, ok := r.lookupAndDeleteCIID(key)
+	if !ok {
+		log.Info(
+			"CR is gone but CI ID not found in cache, periodic sync will handle cleanup",
+			"key", key,
+		)
+		return
+	}
+
+	log.Info(
+		"CR is garbage collected, signaling fulfillment service",
+		"key", key,
+		"ciID", ciID,
+	)
+
+	_, err := r.computeInstancesClient.Signal(ctx, privatev1.ComputeInstancesSignalRequest_builder{
+		Id: ciID,
+	}.Build())
+	if err != nil {
+		log.Error(
+			err,
+			"Failed to signal fulfillment service, periodic sync will handle cleanup",
+			"key", key,
+			"ciID", ciID,
+		)
+	}
 }
 
 func (r *ComputeInstanceFeedbackReconciler) fetchComputeInstance(ctx context.Context, id string) (vm *privatev1.ComputeInstance, err error) {

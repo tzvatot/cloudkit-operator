@@ -44,6 +44,10 @@ type mockComputeInstancesClient struct {
 	updateCalled   bool
 	updateCount    int
 	lastUpdate     *privatev1.ComputeInstance
+	signalCalled   bool
+	signalCount    int
+	signalID       string
+	signalError    error
 }
 
 func (m *mockComputeInstancesClient) List(ctx context.Context, in *privatev1.ComputeInstancesListRequest, opts ...grpc.CallOption) (*privatev1.ComputeInstancesListResponse, error) {
@@ -76,7 +80,13 @@ func (m *mockComputeInstancesClient) Update(ctx context.Context, in *privatev1.C
 }
 
 func (m *mockComputeInstancesClient) Signal(ctx context.Context, in *privatev1.ComputeInstancesSignalRequest, opts ...grpc.CallOption) (*privatev1.ComputeInstancesSignalResponse, error) {
-	return nil, errors.New("not implemented")
+	m.signalCalled = true
+	m.signalCount++
+	m.signalID = in.GetId()
+	if m.signalError != nil {
+		return nil, m.signalError
+	}
+	return &privatev1.ComputeInstancesSignalResponse{}, nil
 }
 
 var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
@@ -105,6 +115,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			hubClient:                k8sClient,
 			computeInstancesClient:   mockClient,
 			computeInstanceNamespace: computeInstanceNS,
+			ciIDCache:                make(map[types.NamespacedName]string),
 		}
 
 		// Create the namespace if it doesn't exist
@@ -120,7 +131,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 	})
 
 	Context("When reconciling a resource that doesn't exist", func() {
-		It("should return without error", func() {
+		It("should return without error and not signal", func() {
 			request := reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      "non-existent",
@@ -130,6 +141,67 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.updateCalled).To(BeFalse())
+			Expect(mockClient.signalCalled).To(BeFalse())
+		})
+	})
+
+	Context("When a CR is garbage collected and CI ID is cached", func() {
+		BeforeEach(func() {
+			// Pre-populate the cache as if a normal reconciliation had occurred
+			reconciler.ciIDCache[typeNamespacedName] = ciID
+		})
+
+		It("should signal the fulfillment service with the correct CI ID", func() {
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.signalCalled).To(BeTrue())
+			Expect(mockClient.signalID).To(Equal(ciID))
+			Expect(mockClient.updateCalled).To(BeFalse())
+		})
+
+		It("should remove the cache entry after signaling", func() {
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+
+			reconciler.ciIDCacheMu.RLock()
+			_, exists := reconciler.ciIDCache[typeNamespacedName]
+			reconciler.ciIDCacheMu.RUnlock()
+			Expect(exists).To(BeFalse())
+		})
+
+		It("should not return error when Signal fails", func() {
+			mockClient.signalError = errors.New("already archived")
+
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.signalCalled).To(BeTrue())
+		})
+	})
+
+	Context("When a CR is garbage collected but CI ID is NOT cached", func() {
+		It("should return without error and not signal", func() {
+			request := reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      "never-seen-before",
+					Namespace: computeInstanceNS,
+				},
+			}
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.signalCalled).To(BeFalse())
 			Expect(mockClient.updateCalled).To(BeFalse())
 		})
 	})
