@@ -29,6 +29,7 @@ var (
 	cloudkitComputeInstanceIDLabel                   string = fmt.Sprintf("%s/computeinstance-uuid", cloudkitPrefix)
 	cloudkitComputeInstanceFinalizer                 string = fmt.Sprintf("%s/computeinstance", cloudkitPrefix)
 	cloudkitAAPComputeInstanceFinalizer              string = fmt.Sprintf("%s/computeinstance-aap", cloudkitPrefix)
+	cloudkitComputeInstanceFeedbackFinalizer         string = fmt.Sprintf("%s/computeinstance-feedback", cloudkitPrefix)
 	cloudkitComputeInstanceManagementStateAnnotation string = fmt.Sprintf("%s/management-state", cloudkitPrefix)
 	cloudkitVirualMachineFloatingIPAddressAnnotation string = fmt.Sprintf("%s/floating-ip-address", cloudkitPrefix)
 	cloudkitAAPReconciledConfigVersionAnnotation     string = fmt.Sprintf("%s/reconciled-config-version", cloudkitPrefix)

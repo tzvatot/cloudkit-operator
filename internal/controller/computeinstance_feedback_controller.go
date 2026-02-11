@@ -15,16 +15,15 @@ package controller
 
 import (
 	"context"
-	"sync"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	ckv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
@@ -37,13 +36,6 @@ type ComputeInstanceFeedbackReconciler struct {
 	hubClient                clnt.Client
 	computeInstancesClient   privatev1.ComputeInstancesClient
 	computeInstanceNamespace string
-
-	// ciIDCache maps NamespacedName -> CI ID for compute instances seen during
-	// reconciliation. Used to look up the CI ID when the CR has been garbage
-	// collected (NotFound) so we can signal the fulfillment service. In-memory
-	// only; on pod restart the periodic sync (1h) serves as fallback.
-	ciIDCacheMu sync.RWMutex
-	ciIDCache   map[types.NamespacedName]string
 }
 
 // computeInstanceFeedbackReconcilerTask contains data that is used for the reconciliation of a specific compute instance, so there is less
@@ -60,7 +52,6 @@ func NewComputeInstanceFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.
 		hubClient:                hubClient,
 		computeInstancesClient:   privatev1.NewComputeInstancesClient(grpcConn),
 		computeInstanceNamespace: computeInstanceNamespace,
-		ciIDCache:                make(map[types.NamespacedName]string),
 	}
 }
 
@@ -76,24 +67,32 @@ func (r *ComputeInstanceFeedbackReconciler) SetupWithManager(mgr ctrl.Manager) e
 func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request) (result ctrl.Result, err error) {
 	log := ctrllog.FromContext(ctx)
 
-	// Fetch the object to reconcile:
+	// Step 1: Fetch the CR.
 	object := &ckv1alpha1.ComputeInstance{}
 	err = r.hubClient.Get(ctx, request.NamespacedName, object)
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
 			return //nolint:nakedret
 		}
-		// The CR is gone (garbage collected). Signal the fulfillment service
-		// so it can remove the DB finalizer and archive the record immediately.
-		r.handleGarbageCollected(ctx, request.NamespacedName)
+		// CR is gone. With the finalizer this shouldn't normally happen, but
+		// handle gracefully (e.g. finalizer was removed externally).
+		log.Info("CR not found, nothing to do")
 		err = nil
 		return //nolint:nakedret
 	}
 
-	// Get the identifier of the compute instance from the labels. If this isn't present it means that the object wasn't
-	// created by the fulfillment service, so we ignore it.
+	// Step 2: Get the CI ID from labels. If missing, the object wasn't created
+	// by the fulfillment service, so we ignore it.
 	ciID, ok := object.Labels[cloudkitComputeInstanceIDLabel]
 	if !ok {
+		// If being deleted and somehow has our finalizer, remove it to unblock deletion.
+		if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, cloudkitComputeInstanceFeedbackFinalizer) {
+			log.Info("CR without CI ID label is being deleted, removing feedback finalizer")
+			if controllerutil.RemoveFinalizer(object, cloudkitComputeInstanceFeedbackFinalizer) {
+				err = r.hubClient.Update(ctx, object)
+			}
+			return //nolint:nakedret
+		}
 		log.Info(
 			"There is no label containing the compute instance identifier, will ignore it",
 			"label", cloudkitComputeInstanceIDLabel,
@@ -101,17 +100,21 @@ func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, reque
 		return
 	}
 
-	// Cache the CI ID so we can signal the fulfillment service if this CR is garbage collected.
-	r.cacheCIID(request.NamespacedName, ciID)
+	// Step 3: If NOT being deleted, ensure our finalizer is present.
+	if object.DeletionTimestamp.IsZero() {
+		if controllerutil.AddFinalizer(object, cloudkitComputeInstanceFeedbackFinalizer) {
+			if err = r.hubClient.Update(ctx, object); err != nil {
+				return //nolint:nakedret
+			}
+		}
+	}
 
-	// Fetch the compute instance:
+	// Step 4: Sync state to the fulfillment service.
 	ci, err := r.fetchComputeInstance(ctx, ciID)
 	if err != nil {
 		return
 	}
 
-	// Create a task to do the rest of the job, but using copies of the objects, so that we can later compare the
-	// before and after values and save only the objects that have changed.
 	t := &computeInstanceFeedbackReconcilerTask{
 		r:      r,
 		object: object,
@@ -120,64 +123,52 @@ func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, reque
 
 	t.handleUpdate(ctx)
 
-	// Save the objects that have changed:
 	err = r.saveComputeInstance(ctx, ci, t.ci)
 	if err != nil {
 		return
 	}
+
+	// Steps 5/6: If being deleted and our finalizer is present, check if we're
+	// the last finalizer remaining.
+	if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, cloudkitComputeInstanceFeedbackFinalizer) {
+		if len(object.GetFinalizers()) == 1 {
+			// Step 5: We're the last finalizer. Remove our finalizer first to
+			// allow garbage collection, then signal the fulfillment service.
+			// This order ensures the K8s CR is gone before the fulfillment
+			// controller checks — avoiding a race where it sees the CR still
+			// exists and skips archival.
+			log.Info(
+				"Feedback finalizer is last remaining, removing finalizer and signaling",
+				"ciID", ciID,
+			)
+			if controllerutil.RemoveFinalizer(object, cloudkitComputeInstanceFeedbackFinalizer) {
+				err = r.hubClient.Update(ctx, object)
+				if err != nil {
+					return
+				}
+			}
+			_, signalErr := r.computeInstancesClient.Signal(ctx, privatev1.ComputeInstancesSignalRequest_builder{
+				Id: ciID,
+			}.Build())
+			if signalErr != nil {
+				log.Error(
+					signalErr,
+					"Failed to signal fulfillment service, periodic sync will handle cleanup",
+					"ciID", ciID,
+				)
+			}
+		} else {
+			// Step 6: Other finalizers still present. No action needed — when
+			// another controller removes its finalizer, the Update event will
+			// trigger a new reconcile.
+			log.Info(
+				"Other finalizers still present, waiting",
+				"finalizers", object.GetFinalizers(),
+			)
+		}
+	}
+
 	return
-}
-
-// cacheCIID stores the CI ID for a given NamespacedName in the in-memory cache.
-func (r *ComputeInstanceFeedbackReconciler) cacheCIID(key types.NamespacedName, ciID string) {
-	r.ciIDCacheMu.Lock()
-	defer r.ciIDCacheMu.Unlock()
-	r.ciIDCache[key] = ciID
-}
-
-// lookupAndDeleteCIID retrieves and removes the CI ID for a given NamespacedName from the cache.
-func (r *ComputeInstanceFeedbackReconciler) lookupAndDeleteCIID(key types.NamespacedName) (string, bool) {
-	r.ciIDCacheMu.Lock()
-	defer r.ciIDCacheMu.Unlock()
-	ciID, ok := r.ciIDCache[key]
-	if ok {
-		delete(r.ciIDCache, key)
-	}
-	return ciID, ok
-}
-
-// handleGarbageCollected is called when the CR is no longer found (garbage collected).
-// It looks up the CI ID from the cache and signals the fulfillment service so it can
-// remove the DB finalizer and archive the record.
-func (r *ComputeInstanceFeedbackReconciler) handleGarbageCollected(ctx context.Context, key types.NamespacedName) {
-	log := ctrllog.FromContext(ctx)
-
-	ciID, ok := r.lookupAndDeleteCIID(key)
-	if !ok {
-		log.Info(
-			"CR is gone but CI ID not found in cache, periodic sync will handle cleanup",
-			"key", key,
-		)
-		return
-	}
-
-	log.Info(
-		"CR is garbage collected, signaling fulfillment service",
-		"key", key,
-		"ciID", ciID,
-	)
-
-	_, err := r.computeInstancesClient.Signal(ctx, privatev1.ComputeInstancesSignalRequest_builder{
-		Id: ciID,
-	}.Build())
-	if err != nil {
-		log.Error(
-			err,
-			"Failed to signal fulfillment service, periodic sync will handle cleanup",
-			"key", key,
-			"ciID", ciID,
-		)
-	}
 }
 
 func (r *ComputeInstanceFeedbackReconciler) fetchComputeInstance(ctx context.Context, id string) (vm *privatev1.ComputeInstance, err error) {
