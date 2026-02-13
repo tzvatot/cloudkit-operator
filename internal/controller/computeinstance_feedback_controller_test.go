@@ -237,7 +237,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Id:   ciID,
 					Spec: &privatev1.ComputeInstanceSpec{},
 					Status: &privatev1.ComputeInstanceStatus{
-						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_READY,
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
 					},
 				},
 			}
@@ -339,7 +339,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Id:   ciID,
 					Spec: &privatev1.ComputeInstanceSpec{},
 					Status: &privatev1.ComputeInstanceStatus{
-						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_READY,
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
 					},
 				},
 			}
@@ -411,7 +411,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Id:   ciID,
 					Spec: &privatev1.ComputeInstanceSpec{},
 					Status: &privatev1.ComputeInstanceStatus{
-						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_READY,
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
 					},
 				},
 			}
