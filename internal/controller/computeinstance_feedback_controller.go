@@ -72,13 +72,13 @@ func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, reque
 	err = r.hubClient.Get(ctx, request.NamespacedName, object)
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
-			return //nolint:nakedret
+			return result, err
 		}
 		// CR is gone. With the finalizer this shouldn't normally happen, but
 		// handle gracefully (e.g. finalizer was removed externally).
 		log.Info("CR not found, nothing to do")
 		err = nil
-		return //nolint:nakedret
+		return result, err
 	}
 
 	// Step 2: Get the CI ID from labels. If missing, the object wasn't created
@@ -91,7 +91,7 @@ func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, reque
 			if controllerutil.RemoveFinalizer(object, cloudkitComputeInstanceFeedbackFinalizer) {
 				err = r.hubClient.Update(ctx, object)
 			}
-			return //nolint:nakedret
+			return result, err
 		}
 		log.Info(
 			"There is no label containing the compute instance identifier, will ignore it",
@@ -104,7 +104,7 @@ func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, reque
 	if object.DeletionTimestamp.IsZero() {
 		if controllerutil.AddFinalizer(object, cloudkitComputeInstanceFeedbackFinalizer) {
 			if err = r.hubClient.Update(ctx, object); err != nil {
-				return //nolint:nakedret
+				return result, err
 			}
 		}
 	}
